@@ -146,3 +146,14 @@ jobs:
 
       - name: Push to DVC
         run: dvc push
+
+  merge-pull-request:
+    needs: [train-model, evaluate-model, convert-model]
+    runs-on: self-hosted
+    steps:
+      - name: Merge Pull Request
+        uses: pascalgn/automerge-action@v0.16.2
+        env:
+          MERGE_COMMIT_MESSAGE: 'Auto-merge pull request'
+          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          MERGE_METHOD: "squash"
