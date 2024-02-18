@@ -1,5 +1,7 @@
-name: Genesis Pipeline
-on: workflow_dispatch
+name: Train & Evaluate & Convert Model
+on:
+  pull_request:
+    branches: [ main ]
 
 jobs:
   train-model:
@@ -10,8 +12,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-            ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -24,6 +24,9 @@ jobs:
 
       - name: Change Directory Status
         run: git config --global --add safe.directory '*'
+      
+      - name: Pull from DVC
+        run: dvc pull mymodels/best.pt
 
       - name: Train within Docker container
         run: python train.py
@@ -75,6 +78,15 @@ jobs:
       - name: Run Evaluate
         run: python val.py
 
+      - name: Check Differences
+        run: dvc metrics diff -R --targets myresults/metrics.json >> report.md
+
+      - uses: iterative/setup-cml@v2
+      - name: Send Comment to Pull Request
+        env:
+          REPO_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: cml comment update report.md
+
       - name: Send Evaluation Results to DVC
         run: dvc add myresults/metrics.json
 
@@ -87,3 +99,61 @@ jobs:
 
       - name: Push to DVC
         run: dvc push
+    
+  convert-model:
+    needs: [train-model, evaluate-model]
+    runs-on: self-hosted
+    container:
+      image: buraktag/mlops_case_study:latest
+      options: --ipc=host --gpus all
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCLOUD }}'
+
+      - name: Setup DVC
+        run: pip install dvc[gs]
+
+      - name: Change Directory Status
+        run: git config --global --add safe.directory '*'
+
+      - name: Pull from DVC
+        run: dvc pull mymodels/best.pt
+
+      - name: Convert Model
+        run: python export.py
+
+      - name: Validate Model with Bus Image
+        run: python predict.py
+
+      - name: Send Evaluation Results to DVC
+        run: dvc add mymodels/best.engine
+
+      - name: Commit and Push Changes Evaluation to DVC
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: 'Update TensorRT Model'
+          file_pattern: mymodels/.gitignore mymodels/best.engine.dvc
+          branch: ${{ github.head_ref }}
+
+      - name: Push to DVC
+        run: dvc push
+
+  merge-pull-request:
+    needs: [train-model, evaluate-model, convert-model]
+    runs-on: self-hosted
+    steps:
+      - name: Merge Pull Request
+        uses: pascalgn/automerge-action@v0.16.2
+        env:
+          MERGE_COMMIT_MESSAGE: 'Auto-merge pull request'
+          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          MERGE_METHOD: "squash"
