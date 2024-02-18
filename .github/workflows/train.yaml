@@ -26,6 +26,9 @@ jobs:
 
       - name: Change Directory Status
         run: git config --global --add safe.directory '*'
+      
+      - name: Pull from DVC
+        run: dvc pull mymodels/best.pt
 
       - name: Train within Docker container
         run: python train.py
